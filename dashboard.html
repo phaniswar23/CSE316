@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            text-align: center;
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            width: 60%;
+            margin: 50px auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        h2 {
+            color: #333;
+        }
+
+        .upload-section {
+            margin-bottom: 20px;
+        }
+
+        input[type="file"] {
+            display: block;
+            margin: 10px auto;
+        }
+
+        .btn {
+            background-color: #28a745;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+
+        .btn:hover {
+            background-color: #218838;
+        }
+
+        .file-list {
+            list-style-type: none;
+            padding: 0;
+        }
+
+        .file-list li {
+            background: #eee;
+            padding: 10px;
+            margin: 5px;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .file-actions a, .file-actions button {
+            text-decoration: none;
+            color: white;
+            background-color: #007bff;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 5px;
+            margin: 0 5px;
+            cursor: pointer;
+        }
+
+        .file-actions a:hover {
+            background-color: #0056b3;
+        }
+
+        .file-actions .btn-delete {
+            background: #dc3545;
+        }
+
+        .file-actions .btn-delete:hover {
+            background: #c82333;
+        }
+
+        .logout-btn {
+            margin-top: 20px;
+            display: inline-block;
+            padding: 10px 15px;
+            background: #dc3545;
+            color: white;
+            border-radius: 5px;
+            text-decoration: none;
+        }
+
+        .logout-btn:hover {
+            background: #c82333;
+        }
+
+        /* Style for metadata popup */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 40%;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .modal h3 {
+            margin: 0 0 10px;
+        }
+
+        .modal p {
+            text-align: left;
+            margin: 5px 0;
+        }
+
+        .close-btn {
+            background: #dc3545;
+            color: white;
+            padding: 5px 10px;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+
+        .close-btn:hover {
+            background: #c82333;
+        }
+
+        /* Share link popup */
+        .share-modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 40%;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .share-modal h3 {
+            margin-bottom: 10px;
+        }
+
+        .share-link {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            margin-bottom: 10px;
+        }
+
+        .copy-btn {
+            background: #007bff;
+            color: white;
+            padding: 5px 10px;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+
+        .copy-btn:hover {
+            background: #0056b3;
+        }
+
+        /* Flash Message Styling */
+        .flash-message {
+            color: white;
+            background: #dc3545;
+            padding: 10px;
+            margin: 10px;
+            border-radius: 5px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>📂 Secure File Dashboard</h2>
+        <p>🔐 All files are encrypted for security.</p>
+
+        <!-- Flash Messages -->
+        <div id="flash-message" class="flash-message"></div>
+
+        <div class="upload-section">
+            <form action="/upload" method="POST" enctype="multipart/form-data">
+                <input type="file" name="file" accept=".txt, .pdf, .png, .jpg, .jpeg, .gif">
+                <button type="submit" class="btn">Upload File</button>
+            </form>
+        </div>
+
+        <h3>📄 Your Files</h3>
+        <ul class="file-list">
+            {% for file in files %}
+            <li>
+                <span>{{ file }}</span>
+                <div class="file-actions">
+                    <a href="{{ url_for('view_file', filename=file) }}" target="_blank">👁 View</a>
+                    <button onclick="fetchMetadata('{{ file }}')">ℹ Metadata</button>
+                    <a href="{{ url_for('download_file', filename=file) }}">⬇ Download</a>
+                    <button onclick="generateShareLink('{{ file }}')">🔗 Share</button>
+                    <form action="{{ url_for('delete_file', filename=file) }}" method="POST" style="display:inline;">
+                        <button type="submit" class="btn-delete">🗑 Delete</button>
+                    </form>
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+
+        <a href="{{ url_for('logout') }}" class="logout-btn">Logout</a>
+    </div>
+
+    <!-- Metadata Modal -->
+    <div id="metadata-modal" class="modal">
+        <h3>File Metadata</h3>
+        <div id="metadata-content"></div>
+        <button class="close-btn" onclick="closeMetadata()">Close</button>
+    </div>
+
+    <!-- Share Link Modal -->
+    <div id="share-modal" class="share-modal">
+        <h3>Share File</h3>
+        <input type="text" id="share-link" class="share-link" readonly>
+        <button class="copy-btn" onclick="copyShareLink()">📋 Copy Link</button>
+        <button class="close-btn" onclick="closeShareModal()">Close</button>
+    </div>
+
+    <script>
+        function fetchMetadata(filename) {
+            fetch(`/metadata/${filename}`)
+                .then(response => response.json())
+                .then(data => {
+                    let content = `<p><strong>Filename:</strong> ${data['Filename']}</p>
+                                   <p><strong>Size:</strong> ${data['Size (bytes)']} bytes</p>
+                                   <p><strong>Created:</strong> ${data['Created']}</p>
+                                   <p><strong>Modified:</strong> ${data['Modified']}</p>`;
+                    document.getElementById('metadata-content').innerHTML = content;
+                    document.getElementById('metadata-modal').style.display = 'block';
+                })
+                .catch(error => alert('Error fetching metadata: ' + error));
+        }
+    </script>
+
+</body>
+</html>
