@@ -1,194 +1,210 @@
-from flask import Flask, render_template, request, redirect, url_for, send_file, session, jsonify, flash
-from werkzeug.utils import secure_filename
-from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from flask import Flask, render_template, request, redirect, url_for, session, send_file, flash, jsonify
 import os
+import hashlib
 import base64
+from werkzeug.utils import secure_filename
 from cryptography.fernet import Fernet
-from datetime import datetime
-import pyclamd  # For malware scanning
+import time
+import tempfile
+import subprocess
+import mimetypes
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey"
+app.secret_key = 'supersecretkey'
 
-# Flask-Login Setup
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = "login"
+UPLOAD_FOLDER = 'uploads'
+ENCRYPTED_FOLDER = 'encrypted_files'
+SHARE_FOLDER = 'shared_links'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(ENCRYPTED_FOLDER, exist_ok=True)
+os.makedirs(SHARE_FOLDER, exist_ok=True)
 
-# Simulated user database
-users = {"user1": {"password": "password123"}}
+# Multiple user credentials
+USERS = {
+    'user1': 'password123',
+    'user2': 'password456',
+    'user3': 'password789'
+}
 
-class User(UserMixin):
-    def __init__(self, username):
-        self.id = username
+# Generate encryption key
+fernet_key = base64.urlsafe_b64encode(hashlib.sha256(b'securekey').digest())
+fernet = Fernet(fernet_key)
 
-@login_manager.user_loader
-def load_user(username):
-    return User(username) if username in users else None
-
-# Encryption Key
-ENCRYPTION_KEY = Fernet.generate_key()
-cipher = Fernet(ENCRYPTION_KEY)
-
-UPLOAD_FOLDER = "uploads"
-ALLOWED_EXTENSIONS = {"txt", "pdf", "png", "jpg", "jpeg", "gif"}  # Prevent executable uploads
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB max file size
-
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-
-# ClamAV Setup (Ensure ClamAV is running)
-try:
-    scanner = pyclamd.ClamdAgnostic()
-    if not scanner.ping():
-        print("ClamAV not running. Please start ClamAV.")
-except Exception as e:
-    print("Error connecting to ClamAV:", e)
-
-def allowed_file(filename):
-    """Check if the file extension is allowed"""
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def is_malicious(file_path):
-    """Scan file for malware using ClamAV"""
-    try:
-        scan_result = scanner.scan_file(file_path)
-        return scan_result and "FOUND" in str(scan_result)
-    except Exception as e:
-        print("Malware scanning error:", e)
-        return False
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        username = request.form["username"]
-        password = request.form["password"]
-        if username in users and users[username]["password"] == password:
-            login_user(User(username))
-            session["username"] = username
-            return redirect(url_for("dashboard"))
-    return render_template("login.html")
-
-@app.route("/logout")
-@login_required
-def logout():
-    logout_user()
-    session.pop("username", None)
-    return redirect(url_for("login"))
-
-@app.route("/")
-@login_required
-def dashboard():
-    user_folder = os.path.join(app.config["UPLOAD_FOLDER"], session["username"])
-    os.makedirs(user_folder, exist_ok=True)
-    files = os.listdir(user_folder)
-    return render_template("dashboard.html", files=files)
-
-@app.route("/upload", methods=["POST"])
-@login_required
-def upload_file():
-    if "file" not in request.files:
-        flash("No file selected!", "error")
-        return redirect(request.url)
-
-    file = request.files["file"]
-    if file.filename == "" or not allowed_file(file.filename):
-        flash("Invalid file type!", "error")
-        return redirect(request.url)
-
-    if len(file.read()) > MAX_FILE_SIZE:
-        flash("File size exceeds limit!", "error")
-        return redirect(request.url)
-    
-    file.seek(0)  # Reset file pointer after reading size
-
-    filename = secure_filename(file.filename)
-    user_folder = os.path.join(app.config["UPLOAD_FOLDER"], session["username"])
-    os.makedirs(user_folder, exist_ok=True)
-
-    file_path = os.path.join(user_folder, filename)
-
-    # Save file temporarily to scan for malware
-    file.save(file_path)
-
-    if is_malicious(file_path):
-        os.remove(file_path)
-        flash("Malware detected! Upload blocked.", "error")
-        return redirect(url_for("dashboard"))
-
-    # Encrypt file
-    with open(file_path, "rb") as f:
-        encrypted_data = cipher.encrypt(f.read())
-
-    with open(file_path, "wb") as f:
+# ------------------ Helper Functions ------------------ #
+def encrypt_file(file_path):
+    with open(file_path, 'rb') as f:
+        data = f.read()
+    encrypted_data = fernet.encrypt(data)
+    encrypted_path = os.path.join(ENCRYPTED_FOLDER, os.path.basename(file_path))
+    with open(encrypted_path, 'wb') as f:
         f.write(encrypted_data)
+    return encrypted_path
 
-    flash("File uploaded successfully!", "success")
-    return redirect(url_for("dashboard"))
+def decrypt_file(file_path):
+    with open(file_path, 'rb') as f:
+        encrypted_data = f.read()
+    return fernet.decrypt(encrypted_data)
 
-@app.route("/view/<filename>")
-@login_required
+def scan_with_clamav(file_path):
+    try:
+        result = subprocess.run(['clamscan', file_path], capture_output=True, text=True)
+        return "OK" in result.stdout
+    except Exception:
+        return True  # Allow if clamscan fails
+
+# ------------------ Routes ------------------ #
+@app.route('/', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        if USERS.get(username) == password:
+            session['pre_2fa_user'] = username
+            return redirect(url_for('two_factor'))
+        else:
+            flash('Invalid username or password')
+    return render_template('login.html')
+
+@app.route('/2fa', methods=['GET', 'POST'])
+def two_factor():
+    if 'pre_2fa_user' not in session:
+        return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        otp = request.form['otp']
+        if otp == '123456':
+            session['user'] = session.pop('pre_2fa_user')
+            return redirect(url_for('dashboard'))
+        else:
+            flash('Invalid OTP', 'error')
+    return render_template('2fa.html')
+
+@app.route('/dashboard')
+def dashboard():
+    if 'user' not in session:
+        return redirect(url_for('login'))
+    files = os.listdir(ENCRYPTED_FOLDER)
+    return render_template('dashboard.html', files=files)
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'user' not in session:
+        return redirect(url_for('login'))
+
+    file = request.files.get('file')
+    if file:
+        filename = secure_filename(file.filename)
+        temp_path = os.path.join(UPLOAD_FOLDER, filename)
+        file.save(temp_path)
+
+        if not scan_with_clamav(temp_path):
+            os.remove(temp_path)
+            flash('File contains a virus and was rejected.')
+            return redirect(url_for('dashboard'))
+
+        encrypt_file(temp_path)
+        os.remove(temp_path)
+        flash('File uploaded and encrypted successfully.')
+    return redirect(url_for('dashboard'))
+
+@app.route('/view/<filename>')
 def view_file(filename):
-    user_folder = os.path.join(app.config["UPLOAD_FOLDER"], session["username"])
-    file_path = os.path.join(user_folder, filename)
+    if 'user' not in session:
+        return redirect(url_for('login'))
 
-    if not os.path.exists(file_path):
-        return "File not found!", 404
+    try:
+        decrypted_data = decrypt_file(os.path.join(ENCRYPTED_FOLDER, filename))
+    except Exception:
+        flash("Error decrypting file")
+        return redirect(url_for('dashboard'))
 
-    with open(file_path, "rb") as file:
-        decrypted_data = cipher.decrypt(file.read())
+    temp = tempfile.NamedTemporaryFile(delete=False)
+    temp.write(decrypted_data)
+    temp.close()
 
-    return decrypted_data.decode("utf-8", errors="ignore")
+    mime_type, _ = mimetypes.guess_type(filename)
+    if mime_type and mime_type.startswith('text'):
+        with open(temp.name, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        os.unlink(temp.name)
+        return render_template('view_text.html', filename=filename, content=content)
+    elif mime_type and (mime_type.startswith('image') or mime_type == 'application/pdf'):
+        return send_file(temp.name, mimetype=mime_type)
+    else:
+        os.unlink(temp.name)
+        flash("Unsupported file format for inline view.")
+        return redirect(url_for('dashboard'))
 
-@app.route("/download/<filename>")
-@login_required
+@app.route('/download/<filename>')
 def download_file(filename):
-    user_folder = os.path.join(app.config["UPLOAD_FOLDER"], session["username"])
-    file_path = os.path.join(user_folder, filename)
+    if 'user' not in session:
+        return redirect(url_for('login'))
 
-    if not os.path.exists(file_path):
-        return "File not found!", 404
+    file_path = os.path.join(ENCRYPTED_FOLDER, filename)
+    try:
+        decrypted_data = decrypt_file(file_path)
+        temp = tempfile.NamedTemporaryFile(delete=False)
+        temp.write(decrypted_data)
+        temp.close()
+        return send_file(temp.name, as_attachment=True, download_name=filename)
+    except Exception:
+        flash('Error downloading file.')
+        return redirect(url_for('dashboard'))
 
-    with open(file_path, "rb") as file:
-        decrypted_data = cipher.decrypt(file.read())
-
-    decrypted_file_path = file_path + "_decrypted"
-    with open(decrypted_file_path, "wb") as decrypted_file:
-        decrypted_file.write(decrypted_data)
-
-    return send_file(decrypted_file_path, as_attachment=True)
-
-@app.route("/delete/<filename>", methods=["POST"])
-@login_required
+@app.route('/delete/<filename>', methods=['POST'])
 def delete_file(filename):
-    user_folder = os.path.join(app.config["UPLOAD_FOLDER"], session["username"])
-    file_path = os.path.join(user_folder, filename)
-
+    if 'user' not in session:
+        return redirect(url_for('login'))
+    file_path = os.path.join(ENCRYPTED_FOLDER, filename)
     if os.path.exists(file_path):
         os.remove(file_path)
+        flash('File deleted.')
+    return redirect(url_for('dashboard'))
 
-    flash("File deleted!", "success")
-    return redirect(url_for("dashboard"))
-
-@app.route("/metadata/<filename>")
-@login_required
-def file_metadata(filename):
-    user_folder = os.path.join(app.config["UPLOAD_FOLDER"], session["username"])
-    file_path = os.path.join(user_folder, filename)
-
+@app.route('/metadata/<filename>')
+def metadata(filename):
+    if 'user' not in session:
+        return jsonify({'error': 'Unauthorized'}), 403
+    file_path = os.path.join(ENCRYPTED_FOLDER, filename)
     if not os.path.exists(file_path):
-        return jsonify({"error": "File not found!"}), 404
+        return jsonify({'error': 'File not found'}), 404
+    stats = os.stat(file_path)
+    return jsonify({
+        'Filename': filename,
+        'Size (bytes)': stats.st_size,
+        'Created': time.ctime(stats.st_ctime),
+        'Modified': time.ctime(stats.st_mtime)
+    })
 
-    metadata = {
-        "Filename": filename,
-        "Size (bytes)": os.path.getsize(file_path),
-        "Created": datetime.fromtimestamp(os.path.getctime(file_path)).strftime("%Y-%m-%d %H:%M:%S"),
-        "Modified": datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%Y-%m-%d %H:%M:%S"),
-    }
+@app.route('/share/<filename>')
+def share_file(filename):
+    if 'user' not in session:
+        return redirect(url_for('login'))
 
-    return jsonify(metadata)
+    shared_path = os.path.join(SHARE_FOLDER, filename)
+    orig_path = os.path.join(ENCRYPTED_FOLDER, filename)
+    if os.path.exists(orig_path):
+        with open(orig_path, 'rb') as f_in, open(shared_path, 'wb') as f_out:
+            f_out.write(f_in.read())
+        share_url = url_for('shared_file', filename=filename, _external=True)
+        return jsonify({'link': share_url})
+    return jsonify({'error': 'File not found'}), 404
 
-if __name__ == "__main__":
+@app.route('/shared/<filename>')
+def shared_file(filename):
+    shared_path = os.path.join(SHARE_FOLDER, filename)
+    if os.path.exists(shared_path):
+        try:
+            decrypted_data = decrypt_file(shared_path)
+            return decrypted_data.decode('utf-8', errors='ignore')
+        except Exception:
+            return 'Error reading shared file'
+    return 'Shared file not found', 404
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+if __name__ == '__main__':
     app.run(debug=True)
