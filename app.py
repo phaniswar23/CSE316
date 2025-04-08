@@ -12,6 +12,9 @@ import mimetypes
 app = Flask(__name__)
 app.secret_key = 'supersecretkey'
 
+# Set maximum file size to 16 MB
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
+
 UPLOAD_FOLDER = 'uploads'
 ENCRYPTED_FOLDER = 'encrypted_files'
 SHARE_FOLDER = 'shared_links'
@@ -205,6 +208,12 @@ def shared_file(filename):
 def logout():
     session.clear()
     return redirect(url_for('login'))
+
+# ------------------ Error Handlers ------------------ #
+@app.errorhandler(413)
+def file_too_large(e):
+    flash('File is too large. Maximum allowed size is 16MB.')
+    return redirect(url_for('dashboard'))
 
 if __name__ == '__main__':
     app.run(debug=True)
